@@ -1,0 +1,7 @@
+transformers
+torch
+torchaudio
+jiwer
+pandas
+tqdm
+soundfile
