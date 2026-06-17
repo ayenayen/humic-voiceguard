@@ -13,14 +13,11 @@ import os
 # Atur Hugging Face cache ke drive D: karena C: penuh
 os.environ["HF_HOME"] = r"d:\Intern_HUMIC\hf_cache"
 
-# -- FIX FFMPEG DEPENDENCY ON STREAMLIT CLOUD --
-try:
-    import imageio_ffmpeg
-    ffmpeg_dir = os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
-    os.environ["PATH"] += os.pathsep + ffmpeg_dir
-except Exception:
-    pass
-# ---------------------------------------------
+# Inject FFmpeg to PATH so transformers can find it
+ffmpeg_path = r"C:\Users\LEGION\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin"
+if ffmpeg_path not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
+
 
 import plotly.graph_objects as go
 import plotly.express as px
@@ -668,7 +665,6 @@ def load_whisper_model():
         return None
 
 import re
-
 def detect_and_highlight(text):
     count = 0
     # Sort keywords by length descending so "jelek banget" matches before "jelek"
@@ -843,17 +839,10 @@ def page_dashboard():
         """, unsafe_allow_html=True)
 
     with col_upload:
-        st.markdown("""
-        <div class="upload-zone">
-            <div class="upload-icon"></div>
-            <div class="upload-text">Tarik & Lepas File Audio</div>
-            <div class="upload-sub">atau klik untuk memilih file (.mp3, .wav)</div>
-        </div>
-        """, unsafe_allow_html=True)
         uploaded_file = st.file_uploader(
-            "Pilih file audio",
+            "Tarik & Lepas File Audio atau klik untuk memilih file (.mp3, .wav)",
             type=["wav", "mp3"],
-            label_visibility="collapsed",
+            label_visibility="visible",
             key="audio_upload"
         )
         if uploaded_file is not None:
@@ -861,6 +850,16 @@ def page_dashboard():
             st.success(f"File **{uploaded_file.name}** berhasil diunggah!")
             if st.button("Mulai Analisis", key="start_analysis"):
                 st.session_state.uploaded_bytes = uploaded_file.getvalue()
+                st.session_state.page = "Deep Analysis"
+                st.session_state.processing = True
+                st.rerun()
+
+        if st.button("[DEBUG] Test K1.wav"):
+            test_file_path = r"d:\Intern_HUMIC\Internship_Humic\RIN_DATAVERSE_SAMPLE\RIN_DATAVERSE_SAMPLE\K1.wav"
+            if os.path.exists(test_file_path):
+                with open(test_file_path, "rb") as f:
+                    st.session_state.uploaded_bytes = f.read()
+                st.session_state.selected_file = "K1.wav"
                 st.session_state.page = "Deep Analysis"
                 st.session_state.processing = True
                 st.rerun()
@@ -944,13 +943,26 @@ def page_deep_analysis():
             if audio_bytes:
                 pipe = load_whisper_model()
                 
-                # Gunakan file temporary agar ffmpeg bisa membaca file audio (mp3/wav)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                # Gunakan file temporary agar ffmpeg/librosa bisa membacanya tanpa error di Windows
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
                     tmp.write(audio_bytes)
                     tmp_path = tmp.name
                     
-                res = pipe(tmp_path, return_timestamps=True)
-                os.remove(tmp_path)
+                # Konversi paksa ke format WAV standar via ffmpeg (mengatasi error "Soundfile is malformed" di transformers)
+                converted_path = tmp_path + "_conv.wav"
+                import subprocess
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", tmp_path, "-ar", "16000", "-ac", "1", converted_path], 
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL
+                )
+                
+                # Jika konversi gagal, fallback ke tmp_path aslinya
+                target_path = converted_path if os.path.exists(converted_path) else tmp_path
+                res = pipe(target_path, return_timestamps=True)
+                
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+                if os.path.exists(converted_path): os.remove(converted_path)
                 
                 segments = []
                 total_bullying = 0
@@ -978,13 +990,34 @@ def page_deep_analysis():
         st.session_state.processing = False
         st.rerun()
 
+    # Calculate dynamic stats
+    segments = st.session_state.get('real_segments', [])
+    b_count = st.session_state.get('real_bullying_count', 0)
+    
+    if segments:
+        last_time_str = segments[-1].get("time", "00:00")
+        durasi = last_time_str
+        total_kata = sum(len(seg["text"].replace("<bw>", "").replace("</bw>", "").split()) for seg in segments)
+    else:
+        durasi = "00:00"
+        total_kata = 0
+
+    # Simple risk calculation
+    skor_risiko = min(100, b_count * 15)
+    if skor_risiko >= 60:
+        level_risiko, color, border = "High", "#EF4444", "rgba(239,68,68,0.2)"
+    elif skor_risiko >= 30:
+        level_risiko, color, border = "Medium", "#F59E0B", "rgba(245,158,11,0.2)"
+    else:
+        level_risiko, color, border = "Low", "#10B981", "rgba(16,185,129,0.2)"
+
     # ── Header ──
     hdr_left, hdr_right = st.columns([4, 1])
     with hdr_left:
         st.markdown(f"""
         <div>
             <div class="analysis-title">Deep Analysis</div>
-            <div class="analysis-subtitle">{filename} · Durasi 20:14</div>
+            <div class="analysis-subtitle">{filename} · Durasi {durasi}</div>
         </div>
         """, unsafe_allow_html=True)
     with hdr_right:
@@ -1000,30 +1033,30 @@ def page_deep_analysis():
     # ── Stat Cards ──
     s1, s2, s3, s4 = st.columns(4)
     with s1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-item">
-            <div class="stat-item-value">20:14</div>
+            <div class="stat-item-value">{durasi}</div>
             <div class="stat-item-label">Durasi</div>
         </div>
         """, unsafe_allow_html=True)
     with s2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-item">
-            <div class="stat-item-value">1,284</div>
+            <div class="stat-item-value">{total_kata}</div>
             <div class="stat-item-label">Total Kata</div>
         </div>
         """, unsafe_allow_html=True)
     with s3:
         st.markdown(f"""
-        <div class="stat-item" style="border-color: rgba(239,68,68,0.2);">
-            <div class="stat-item-value" style="color:#EF4444;">High</div>
+        <div class="stat-item" style="border-color: {border};">
+            <div class="stat-item-value" style="color:{color};">{level_risiko}</div>
             <div class="stat-item-label">Level Risiko</div>
         </div>
         """, unsafe_allow_html=True)
     with s4:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-item">
-            <div class="stat-item-value">92<span style="font-size:14px;color:#64748B;">/100</span></div>
+            <div class="stat-item-value">{skor_risiko}<span style="font-size:14px;color:#64748B;">/100</span></div>
             <div class="stat-item-label">Skor Risiko</div>
         </div>
         """, unsafe_allow_html=True)
