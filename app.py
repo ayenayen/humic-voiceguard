@@ -13,6 +13,15 @@ import os
 # Atur Hugging Face cache ke drive D: karena C: penuh
 os.environ["HF_HOME"] = r"d:\Intern_HUMIC\hf_cache"
 
+# -- FIX FFMPEG DEPENDENCY ON STREAMLIT CLOUD --
+try:
+    import imageio_ffmpeg
+    ffmpeg_dir = os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
+    os.environ["PATH"] += os.pathsep + ffmpeg_dir
+except Exception:
+    pass
+# ---------------------------------------------
+
 import plotly.graph_objects as go
 import plotly.express as px
 import json
