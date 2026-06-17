@@ -659,6 +659,9 @@ def load_whisper_model():
         return None
 
 import re
+import soundfile as sf
+import numpy as np
+
 def detect_and_highlight(text):
     count = 0
     # Sort keywords by length descending so "jelek banget" matches before "jelek"
@@ -934,12 +937,19 @@ def page_deep_analysis():
             if audio_bytes:
                 pipe = load_whisper_model()
                 
-                # Gunakan file temporary agar ffmpeg/librosa bisa membacanya tanpa error di Windows
+                # Gunakan file temporary
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                     tmp.write(audio_bytes)
                     tmp_path = tmp.name
                     
-                res = pipe(tmp_path, return_timestamps=True)
+                # Baca audio menggunakan soundfile untuk menghindari dependensi ffmpeg di Streamlit Cloud
+                audio, sr = sf.read(tmp_path)
+                
+                # Konversi stereo ke mono jika perlu
+                if len(audio.shape) > 1:
+                    audio = audio.mean(axis=1)
+                    
+                res = pipe({"sampling_rate": sr, "raw": audio}, return_timestamps=True)
                 os.remove(tmp_path)
                 
                 segments = []
